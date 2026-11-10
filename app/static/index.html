@@ -55,19 +55,19 @@
         </select>
       </label>
     </div>
+    <label id="variantRow" hidden>Version <select name="variant_key"></select></label>
     <label>Notes (size, color…) <textarea name="notes" rows="2"></textarea></label>
     <label>Tracked link <input name="track_url" type="url"></label>
     <label>Image URL <input name="image"></label>
     <p class="muted small" id="editMeta"></p>
     <div class="dlg-actions wrap">
       <button type="button" data-act="refresh" class="ghost">↻ Check price</button>
-      <button type="button" data-act="rematch" class="ghost amz-only">Find on another store</button>
       <button type="button" data-act="use_amazon" class="ghost amz-only">Use Amazon link</button>
       <button type="button" data-act="purchased" class="ghost">Mark purchased</button>
       <button type="button" data-act="delete" class="ghost danger">Delete</button>
     </div>
     <div class="dlg-actions">
-      <button value="cancel" class="ghost">Cancel</button>
+      <button type="button" class="ghost" data-close>Cancel</button>
       <button value="save" id="saveBtn">Save</button>
     </div>
   </form>
@@ -79,7 +79,7 @@
     <input name="password" type="password" placeholder="Password" autocomplete="current-password">
     <p class="status error" id="loginErr" hidden></p>
     <div class="dlg-actions">
-      <button value="cancel" class="ghost">Cancel</button>
+      <button type="button" class="ghost" data-close>Cancel</button>
       <button value="ok">Sign in</button>
     </div>
   </form>

@@ -3,9 +3,8 @@
 A self-hosted wishlist. Paste a product link and it pulls in the name, picture and price.
 Prices are re-checked automatically, and anything on sale gets a red **SALE −xx%** badge.
 
-When you paste an **Amazon** link, it looks for the same product on the brand's own site or another
-store. It only accepts a match when the other page has the same UPC, or the same brand and model
-number. If it can't find one, it keeps the Amazon link.
+When a page sells several versions (CD and vinyl, colors, sizes), it tracks the version your link
+points to, and you can switch versions from the item's edit screen.
 
 ## Run it
 
@@ -59,10 +58,9 @@ If port 8080 is already in use, change the left side of the port line, e.g. `"80
 |---|---|---|
 | `ADMIN_PASSWORD` | *(empty)* | Password for editing. **Empty = anyone can edit.** |
 | `LIST_TITLE` | My Wishlist | Heading on the page |
+| `THEME` | auto | `auto` = Christmas look in Nov–Dec, birthday look in March, normal otherwise. Or force `christmas`, `birthday` or `default`. |
 | `REFRESH_HOURS` | 12 | How often all prices are re-checked (0 = never) |
 | `SALE_DROP_PERCENT` | 5 | A price this % below the item's usual price counts as a sale |
-| `MATCH_AMAZON` | true | Look for Amazon items on other stores |
-| `SEARXNG_URL` | *(empty)* | Use your own SearXNG instance for the store search (recommended) |
 
 ## How "on sale" is decided
 
@@ -77,29 +75,15 @@ The small line next to each store name is the item's recent price trend.
 
 - **✎ (edit)**: rename an item, set the price by hand, add notes (size/color), mark it as a top pick,
   change the tracked link, or delete it.
-- **Find on another store**: re-runs the Amazon matching, for example for an item added before a
-  retailer stocked it.
-- **Use Amazon link**: switch back to tracking Amazon if you don't like the match it found.
+- **Version**: when a page sells several versions, pick the one to track.
 - **Mark purchased**: moves the item to a "Purchased" section that only you can see.
 - Links that can't be read (blocked sites, non-store pages) are still added. Just fill in the name
   and price yourself.
 
-## Making the Amazon matching more reliable
-
-By default it searches DuckDuckGo, which sometimes rate-limits automated searches. For dependable
-results run your own [SearXNG](https://docs.searxng.org/): uncomment the `searxng` service in
-`docker-compose.yml`, set `SEARXNG_URL: "http://searxng:8080"`, and enable JSON output in
-`./searxng/settings.yml`:
-
-```yaml
-search:
-  formats: [html, json]
-```
-
 ## Known limits
 
 - **Amazon** fights automated price checks. Sometimes it shows a captcha, and that check is skipped
-  (the last known price stays, with a ⚠ note). This is another reason matched non-Amazon links work better.
+  (the last known price stays, with a ⚠ note). Links to the brand's own store are more reliable.
 - Some stores build their pages entirely with JavaScript and publish no product data. For those,
   enter the price by hand.
 - Checks are spaced a few seconds apart so stores don't treat it as a bot.

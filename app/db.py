@@ -32,7 +32,9 @@ CREATE TABLE IF NOT EXISTS items (
     priority INTEGER DEFAULT 0,
     purchased INTEGER DEFAULT 0,
     name_locked INTEGER DEFAULT 0,     -- user edited the name; don't overwrite on refresh
-    match_status TEXT,                 -- matched / not_found / not_amazon / manual
+    match_status TEXT,                 -- (unused; kept for older databases)
+    variant_key TEXT,                  -- which version of the page is tracked
+    variants TEXT,                     -- JSON list of the versions the page sells
     last_checked TEXT,
     last_error TEXT,
     created_at TEXT NOT NULL,
@@ -64,6 +66,10 @@ def conn() -> sqlite3.Connection:
 def init() -> None:
     with _lock, conn() as c:
         c.executescript(SCHEMA)
+        have = {r["name"] for r in c.execute("PRAGMA table_info(items)")}
+        for col in ("variant_key", "variants"):
+            if col not in have:  # database created by an older version
+                c.execute(f"ALTER TABLE items ADD COLUMN {col} TEXT")
 
 
 def insert_item(fields: dict) -> int:

@@ -85,3 +85,38 @@ body:not(.admin) .admin-only { display: none !important; }
 .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent;
   border-radius: 50%; animation: spin .7s linear infinite; vertical-align: -2px; margin-right: 6px; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---- Seasonal themes (set automatically by month; see app.js) ---- */
+header { position: sticky; }
+header::after { content: ""; position: absolute; left: 0; right: 0; bottom: -5px; height: 5px; display: none; }
+.theme-emoji { margin-right: 6px; }
+
+[data-theme="christmas"] { --bg: #fbf7ef; --card: #fffdf9; --line: #eadfce; --accent: #1e6b3c; --accent-ink: #fff; --sale: #c8232c; --sale-bg: #fde9e7; }
+[data-theme="christmas"] header::after { display: block;
+  background: repeating-linear-gradient(135deg, #c8232c 0 12px, #fff 12px 24px, #1e6b3c 24px 36px, #fff 36px 48px); }
+[data-theme="christmas"] h1 { color: #1e6b3c; }
+[data-theme="christmas"] .card { border-color: #e3d8c4; }
+[data-theme="christmas"] .ribbon { background: linear-gradient(135deg, #c8232c, #a3151d); }
+[data-theme="christmas"] .snow { position: fixed; inset: 0; pointer-events: none; z-index: 4; overflow: hidden; }
+[data-theme="christmas"] .snow i { position: absolute; top: -20px; color: #b9cfe0; font-style: normal; opacity: .8;
+  animation: fall linear infinite; }
+@keyframes fall { to { transform: translateY(110vh) translateX(30px) rotate(180deg); } }
+@media (prefers-reduced-motion: reduce) { .snow { display: none; } }
+
+[data-theme="birthday"] { --bg: #fff8fc; --card: #fff; --line: #f1dff0; --accent: #7a3fe0; --accent-ink: #fff; }
+[data-theme="birthday"] header::after { display: block;
+  background: linear-gradient(90deg, #ff5d8f, #ffb703, #3ccf91, #3fa9f5, #7a3fe0, #ff5d8f); }
+[data-theme="birthday"] h1 { background: linear-gradient(90deg, #ff5d8f, #7a3fe0, #3fa9f5); -webkit-background-clip: text;
+  background-clip: text; color: transparent; }
+[data-theme="birthday"] h1 .theme-emoji { color: initial; -webkit-text-fill-color: initial; }
+[data-theme="birthday"] body { background-image: radial-gradient(#ff5d8f33 2px, transparent 3px), radial-gradient(#3fa9f533 2px, transparent 3px),
+  radial-gradient(#ffb70344 2px, transparent 3px); background-size: 90px 90px, 130px 130px, 110px 110px;
+  background-position: 0 0, 40px 60px, 70px 20px; }
+
+@media (prefers-color-scheme: dark) {
+  [data-theme="christmas"] { --bg: #101a14; --card: #18241c; --line: #2a3b30; --accent: #58b97f; --accent-ink: #0b1810; --sale: #ff6b63; --sale-bg: #3a1d1c; }
+  [data-theme="christmas"] h1 { color: #7fd3a1; }
+  [data-theme="christmas"] .card { border-color: #2a3b30; }
+  [data-theme="christmas"] .snow i { color: #dfeaf3; opacity: .55; }
+  [data-theme="birthday"] { --bg: #17131d; --card: #211b2a; --line: #372d45; --accent: #a987ff; --accent-ink: #150f22; }
+}

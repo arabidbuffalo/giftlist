@@ -14,6 +14,4 @@ services:
       ADMIN_PASSWORD: "change-me"
       REFRESH_HOURS: "12"
       SALE_DROP_PERCENT: "5"
-      MATCH_AMAZON: "true"
       TZ: "America/Chicago"
-      # SEARXNG_URL: "http://searxng:8080"

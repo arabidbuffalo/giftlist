@@ -41,6 +41,9 @@ class Product:
     mpn: str | None = None  # manufacturer model number
     in_stock: bool | None = None
     extra_ids: list[str] = field(default_factory=list)
+    variant: str | None = None  # e.g. "Vinyl LP" when a page sells several versions
+    variants: list[dict] = field(default_factory=list)
+    variant_key: str | None = None  # stable id of the selected version
 
     @property
     def is_amazon(self) -> bool:
@@ -220,40 +223,74 @@ def _first_image(img: Any, base: str) -> str | None:
     return urljoin(base, img) if isinstance(img, str) and img else None
 
 
-def _apply_offers(p: Product, offers: Any) -> None:
+def variant_ids(url: str) -> set[str]:
+    """IDs in a URL that usually name the selected version (?variant=, ?sku=, ?preselect=, ...)."""
+    from urllib.parse import parse_qs as _pq
+
+    q = _pq(urlparse(url).query)
+    ids = set()
+    for k in ("variant", "variantid", "variant_id", "sku", "skuid", "skuId", "selectedsku", "preselect", "pid",
+              "id", "item", "option", "format", "edition", "size"):
+        for key in (k, k.lower()):
+            for v in q.get(key, []):
+                if v:
+                    ids.add(v.strip().lower())
+    return ids
+
+
+def _offer_list(offers: Any) -> list[dict]:
     if isinstance(offers, dict) and "offers" in offers and "price" not in offers and "lowPrice" not in offers:
         offers = offers["offers"]
     if not isinstance(offers, list):
         offers = [offers]
-    prices = []
-    for off in offers:
-        if not isinstance(off, dict):
+    return [o for o in offers if isinstance(o, dict)]
+
+
+def _ids_of(d: dict) -> set[str]:
+    out = set()
+    for k in ("sku", "mpn", "gtin", "gtin12", "gtin13", "gtin14", "productID", "@id"):
+        v = d.get(k)
+        if isinstance(v, (str, int)) and str(v):
+            out.add(str(v).strip().lower())
+    u = d.get("url")
+    if isinstance(u, str):
+        out |= variant_ids(u)
+    return out
+
+
+def _offer_price(off: dict) -> tuple[float | None, float | None, str | None]:
+    price = parse_price(off.get("price") or off.get("lowPrice"))
+    list_price = None
+    cur = off.get("priceCurrency")
+    specs = off.get("priceSpecification") or []
+    if isinstance(specs, dict):
+        specs = [specs]
+    for spec in specs:
+        if not isinstance(spec, dict):
             continue
-        price = parse_price(off.get("price") or off.get("lowPrice"))
-        specs = off.get("priceSpecification") or []
-        if isinstance(specs, dict):
-            specs = [specs]
-        for spec in specs:
-            if not isinstance(spec, dict):
-                continue
-            ptype = str(spec.get("priceType", "")).split("/")[-1]
-            sp = parse_price(spec.get("price"))
-            if ptype in ("StrikethroughPrice", "ListPrice", "MSRP", "SRP") and sp:
-                p.list_price = p.list_price or sp
-            elif sp and not price:
-                price = sp
-            p.currency = p.currency or spec.get("priceCurrency")
-        if price:
-            prices.append(price)
-        p.currency = p.currency or off.get("priceCurrency")
-        avail = str(off.get("availability", ""))
-        if avail:
-            p.in_stock = "InStock" in avail or "OnlineOnly" in avail or "LimitedAvailability" in avail
-    if prices and p.price is None:
-        p.price = min(prices)
+        ptype = str(spec.get("priceType", "")).split("/")[-1]
+        sp = parse_price(spec.get("price"))
+        if ptype in ("StrikethroughPrice", "ListPrice", "MSRP", "SRP") and sp:
+            list_price = list_price or sp
+        elif sp and not price:
+            price = sp
+        cur = cur or spec.get("priceCurrency")
+    return price, list_price, cur
+
+
+def _apply_offer(p: Product, off: dict) -> None:
+    price, list_price, cur = _offer_price(off)
+    if price and p.price is None:
+        p.price = price
+        p.list_price = p.list_price or list_price
+    p.currency = p.currency or cur
+    avail = str(off.get("availability", ""))
+    if avail and p.in_stock is None:
+        p.in_stock = "InStock" in avail or "OnlineOnly" in avail or "LimitedAvailability" in avail
 
 
 def _from_jsonld(soup: BeautifulSoup, p: Product) -> None:
+    products: list[dict] = []
     for tag in soup.find_all("script", type=re.compile("ld\\+json", re.I)):
         raw = tag.string or tag.get_text() or ""
         try:
@@ -264,17 +301,47 @@ def _from_jsonld(soup: BeautifulSoup, p: Product) -> None:
             except Exception:
                 continue
         for o in _walk_jsonld(data):
-            if not ({"Product", "ProductGroup", "IndividualProduct", "ProductModel"} & _types(o)):
-                continue
-            p.name = p.name or (o.get("name") or None)
-            p.image = p.image or _first_image(o.get("image"), p.url)
-            brand = o.get("brand") or o.get("manufacturer")
-            if isinstance(brand, list):
-                brand = brand[0] if brand else None
-            if isinstance(brand, dict):
-                brand = brand.get("name")
-            if isinstance(brand, str) and brand.strip():
-                p.brand = p.brand or brand.strip()
+            if {"Product", "ProductGroup", "IndividualProduct", "ProductModel"} & _types(o):
+                products.append(o)
+    if not products:
+        return
+
+    # Pick the version the URL points at; otherwise the first product/offer (not the cheapest).
+    wanted = variant_ids(p.url)
+    chosen_prod, chosen_offer = None, None
+    if wanted:
+        for prod in products:
+            offers = _offer_list(prod.get("offers"))
+            if wanted & _ids_of(prod):
+                chosen_prod = prod
+                chosen_offer = offers[0] if offers else None
+                break
+            for off in offers:
+                if wanted & _ids_of(off):
+                    chosen_prod, chosen_offer = prod, off
+                    break
+            if chosen_prod:
+                break
+    if chosen_prod is None:
+        for prod in products:
+            offers = _offer_list(prod.get("offers"))
+            if offers:
+                chosen_prod, chosen_offer = prod, offers[0]
+                break
+    group = next((x for x in products if "ProductGroup" in _types(x)), None)
+    ordered = [x for x in (chosen_prod, group) if x] + [x for x in products if x is not chosen_prod and x is not group]
+
+    for o in ordered:
+        p.name = p.name or (o.get("name") if isinstance(o.get("name"), str) else None)
+        p.image = p.image or _first_image(o.get("image"), p.url)
+        brand = o.get("brand") or o.get("manufacturer")
+        if isinstance(brand, list):
+            brand = brand[0] if brand else None
+        if isinstance(brand, dict):
+            brand = brand.get("name")
+        if isinstance(brand, str) and brand.strip():
+            p.brand = p.brand or brand.strip()
+        if o is chosen_prod or o is group:
             for k in ("gtin12", "gtin13", "gtin", "gtin14", "gtin8", "upc", "isbn"):
                 if o.get(k):
                     p.gtin = p.gtin or str(o[k])
@@ -284,8 +351,35 @@ def _from_jsonld(soup: BeautifulSoup, p: Product) -> None:
                 p.extra_ids.append(str(o["sku"]))
             if o.get("model") and isinstance(o["model"], str):
                 p.extra_ids.append(o["model"])
-            if "offers" in o:
-                _apply_offers(p, o["offers"])
+    if chosen_offer:
+        _apply_offer(p, chosen_offer)
+        for k in ("gtin12", "gtin13", "gtin", "gtin14", "sku", "mpn"):
+            if chosen_offer.get(k) and k.startswith("gtin"):
+                p.gtin = p.gtin or str(chosen_offer[k])
+        if isinstance(chosen_offer.get("name"), str) and chosen_offer["name"] and len(products) == 1 \
+                and len(_offer_list(chosen_prod.get("offers"))) > 1:
+            p.variant = chosen_offer["name"]
+
+    # Remember every version so the user can pick one (e.g. vinyl vs CD)
+    for prod in products:
+        offers = _offer_list(prod.get("offers"))
+        for off in offers:
+            price, lp, _ = _offer_price(off)
+            if price is None:
+                continue
+            title = off.get("name") or prod.get("name")
+            key = off.get("sku") or (prod.get("sku") if len(offers) == 1 else None) or title
+            avail = str(off.get("availability", ""))
+            p.variants.append({
+                "key": str(key) if key else None, "title": title if isinstance(title, str) else None,
+                "price": price, "list_price": lp,
+                "gtin": next((str(x.get(k)) for x in (off, prod) for k in ("gtin12", "gtin13", "gtin", "gtin14")
+                              if x.get(k)), None),
+                "url": off.get("url") or prod.get("url"), "image": _first_image(prod.get("image"), p.url),
+                "in_stock": ("InStock" in avail or "OnlineOnly" in avail or "LimitedAvailability" in avail) if avail else None,
+            })
+            if off is chosen_offer and key:
+                p.variant_key = str(key)
 
 
 def _meta(soup: BeautifulSoup, *names: str) -> str | None:
@@ -409,9 +503,182 @@ def _from_amazon(soup: BeautifulSoup, p: Product) -> None:
     asin = d("asin")
     if asin:
         p.extra_ids.append(asin)
+    # Selected format (Vinyl / CD / Paperback ...) for music, books and movies
+    fmt = _text(soup.select_one("#tmmSwatches li.selected .slot-title, #tmmSwatches .swatchElement.selected .a-button-text span,"
+                                " #tmm-grid-swatch-container .selected .slot-title, .swatch-list-item-text.selected"))
+    fmt = fmt or d("format", "binding", "media format")
+    if fmt:
+        p.variant = re.sub(r"\s*\$.*$", "", fmt).strip() or None
     avail = _text(soup.select_one("#availability")).lower()
     if avail:
         p.in_stock = not ("unavailable" in avail or "out of stock" in avail)
+
+
+TARGET_KEY = "9f36aeafbe60771e321a7cc95a78140772ab3e96"  # Target's public web key (also read from the page)
+
+
+def _unescape_json_blob(html: str) -> str:
+    """Target embeds its data as JSON inside a JS string, so quotes appear as \\" — flatten that."""
+    return re.sub(r'\\+"', '"', html)
+
+
+def _from_embedded_json(html: str, p: Product) -> None:
+    """Prices some stores only ship inside embedded JSON (Target, and others built the same way)."""
+    flat = _unescape_json_blob(html)
+
+    def num(*keys):
+        for k in keys:
+            m = re.search(rf'"{k}"\s*:\s*"?\$?([\d,]+\.?\d*)', flat)
+            if m and parse_price(m.group(1)):
+                return parse_price(m.group(1))
+        return None
+
+    if p.price is None:
+        p.price = num("current_retail", "current_retail_min", "formatted_current_price")
+        if p.price:
+            p.currency = p.currency or "USD"
+    if p.price and not p.list_price:
+        reg = num("reg_retail", "reg_retail_max", "formatted_comparison_price")
+        if reg and reg > p.price:
+            p.list_price = reg
+    if not p.gtin:
+        m = re.search(r'"primary_barcode"\s*:\s*"(\d{8,14})"', flat) or re.search(r'"upc"\s*:\s*"(\d{8,14})"', flat)
+        if m:
+            p.gtin = m.group(1)
+
+
+def target_tcin(url: str) -> str | None:
+    m = re.search(r"[?&]preselect=(\d{6,10})", url) or re.search(r"/A-(\d{6,10})", url)
+    return m.group(1) if m else None
+
+
+def _target_api(p: Product, html: str) -> None:
+    """Ask Target's own product API (the one its page uses) for price, title, image and UPC."""
+    tcin = target_tcin(p.url)
+    if not tcin:
+        return
+    flat = _unescape_json_blob(html or "")
+    m = re.search(r'"apiKey"\s*:\s*"([0-9a-f]{40})"', flat)
+    key = m.group(1) if m else TARGET_KEY
+    store = re.search(r'"store_id"\s*:\s*"?(\d{3,5})', flat)
+    params = {"key": key, "tcin": tcin, "pricing_store_id": store.group(1) if store else "3991",
+              "is_bot": "false", "channel": "WEB"}
+    try:
+        from curl_cffi import requests as creq
+
+        r = creq.get("https://redsky.target.com/redsky_aggregations/v1/web/pdp_client_v1", params=params,
+                     impersonate="chrome", timeout=TIMEOUT, headers={"Accept": "application/json",
+                                                                     "Origin": "https://www.target.com",
+                                                                     "Referer": p.url})
+        if r.status_code != 200:
+            log.info("target api %s -> %s", tcin, r.status_code)
+            return
+        prod = (r.json().get("data") or {}).get("product") or {}
+    except Exception as e:
+        log.info("target api failed: %s", e)
+        return
+    price = prod.get("price") or {}
+    if not price and prod.get("children"):
+        price = (prod["children"][0] or {}).get("price") or {}
+    cur = parse_price(price.get("current_retail") or price.get("current_retail_min")
+                      or price.get("formatted_current_price"))
+    reg = parse_price(price.get("reg_retail") or price.get("reg_retail_max") or price.get("formatted_comparison_price"))
+    if cur:
+        p.price, p.currency = cur, "USD"
+        p.list_price = reg if reg and reg > cur else p.list_price
+    item = prod.get("item") or {}
+    title = (item.get("product_description") or {}).get("title")
+    if title:
+        from html import unescape
+        p.name = unescape(title)
+    img = ((item.get("enrichment") or {}).get("images") or {}).get("primary_image_url")
+    p.image = img or p.image
+    p.gtin = p.gtin or item.get("primary_barcode")
+    brand = ((item.get("primary_brand") or {}).get("name"))
+    p.brand = p.brand or brand
+
+
+def select_variant(p: Product, key: str | None) -> bool:
+    """Switch p to the version with this key. Returns True if it exists on the page."""
+    if not key:
+        return False
+    pick = next((v for v in p.variants if v.get("key") == key), None)
+    if pick is None:
+        return False
+    p.price, p.list_price = pick["price"], pick.get("list_price")
+    p.gtin = pick.get("gtin") or p.gtin
+    if pick.get("title") and pick["title"] != p.name:
+        p.variant = pick["title"]
+    if pick.get("image"):
+        p.image = pick["image"]
+    if pick.get("url"):
+        p.url = urljoin(p.url, pick["url"])
+    if pick.get("in_stock") is not None:
+        p.in_stock = pick["in_stock"]
+    p.variant_key = key
+    return True
+
+
+def _shopify(p: Product) -> None:
+    """Shopify stores (most band / record shops) publish every version at /products/<handle>.js."""
+    pu = urlparse(p.url)
+    m = re.search(r"(/products/[^/?#]+)", pu.path)
+    if not m:
+        return
+    try:
+        from curl_cffi import requests as creq
+
+        r = creq.get(f"{pu.scheme}://{pu.netloc}{m.group(1)}.js", impersonate="chrome", timeout=TIMEOUT)
+        if r.status_code != 200:
+            return
+        data = r.json()
+    except Exception as e:
+        log.info("shopify lookup failed: %s", e)
+        return
+    variants = data.get("variants") or []
+    if not variants:
+        return
+    base_img = data.get("featured_image")
+    if isinstance(base_img, str) and base_img.startswith("//"):
+        base_img = "https:" + base_img
+    p.variants = []
+    for v in variants:
+        img = (v.get("featured_image") or {}).get("src") if isinstance(v.get("featured_image"), dict) else None
+        if isinstance(img, str) and img.startswith("//"):
+            img = "https:" + img
+        price = (v.get("price") or 0) / 100 or None
+        cap = (v.get("compare_at_price") or 0) / 100 or None
+        title = v.get("public_title") or v.get("title")
+        p.variants.append({
+            "id": str(v.get("id")), "key": str(v.get("id")), "title": None if title in (None, "Default Title") else title,
+            "price": price, "list_price": cap if cap and price and cap > price else None,
+            "gtin": v.get("barcode") or None, "url": f"{m.group(1)}?variant={v.get('id')}",
+            "image": img or base_img, "in_stock": v.get("available"),
+        })
+    wanted = variant_ids(p.url)
+    pick = next((v for v in p.variants if v["id"] in wanted), None) \
+        or next((v for v in p.variants if v["in_stock"]), None) or p.variants[0]
+    p.name = data.get("title") or p.name
+    p.brand = p.brand or data.get("vendor")
+    p.price, p.list_price, p.currency = pick["price"], pick["list_price"], p.currency or "USD"
+    p.in_stock = pick["in_stock"]
+    p.gtin = pick["gtin"] or p.gtin
+    p.image = pick["image"] or p.image
+    p.variant = pick["title"]
+    p.variant_key = pick["key"]
+    if len(p.variants) > 1 and pick["id"] not in wanted:
+        p.url = urljoin(p.url, pick["url"])
+
+
+def enrich(p: Product, html: str) -> Product:
+    """Extra, store-specific steps for pages whose price isn't in the HTML."""
+    if "/products/" in p.url and ("cdn.shopify.com" in html or "Shopify.shop" in html or "shopify" in html[:5000].lower()):
+        _shopify(p)
+    if "target.com" in p.store and (p.price is None or not p.gtin):
+        _target_api(p, html)
+        if p.price is None:
+            _from_embedded_json(html, p)
+    return p
 
 
 def parse(html: str, url: str) -> Product:
@@ -423,6 +690,8 @@ def parse(html: str, url: str) -> Product:
     _from_meta(soup, p)
     if p.name:
         p.name = re.sub(r"\s+", " ", p.name).strip()
+        root = re.sub(r"\.(com|net|org|co\.uk|ca)$", "", p.store).split(".")[-1]
+        p.name = re.sub(rf"\s*[:|\-–]\s*{re.escape(root)}(\.com)?\s*$", "", p.name, flags=re.I) or p.name
         # Strip trailing " | Store Name" / " - Store" suffixes from page titles
         p.name = re.sub(r"\s+[|\-–]\s+[^|\-–]{2,30}$", "", p.name) if len(p.name) > 40 else p.name
     if p.list_price and p.price and p.list_price <= p.price:
@@ -432,10 +701,24 @@ def parse(html: str, url: str) -> Product:
     return p
 
 
-def scrape(url: str) -> Product:
+def display_name(p: Product) -> str | None:
+    """Product name plus the version, e.g. "Album Title – Vinyl LP", so CD and vinyl don't look identical."""
+    if not p.name:
+        return None
+    v = (p.variant or "").strip()
+    if v and v.lower() not in p.name.lower():
+        return f"{p.name} – {v}"
+    return p.name
+
+
+def scrape(url: str, variant_key: str | None = None) -> Product:
     if is_amazon_url(url):
         url = clean_amazon_url(url)
     final, html = fetch(url)
     if is_amazon_url(final):
         final = clean_amazon_url(final)
-    return parse(html, final)
+    elif variant_ids(url) and not variant_ids(final):
+        final = url  # keep ?variant= etc. if the store redirected it away
+    p = enrich(parse(html, final), html)
+    select_variant(p, variant_key)  # the version the user picked wins over the page's default
+    return p

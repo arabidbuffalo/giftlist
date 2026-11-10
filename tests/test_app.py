@@ -4,7 +4,7 @@ os.environ["REFRESH_HOURS"] = "0"
 os.environ["ADMIN_PASSWORD"] = "pw"
 
 import pytest
-from app import db, matcher, scraper, service
+from app import db, scraper, service
 
 FX = pathlib.Path(__file__).parent / "fixtures"
 PAGES = {
@@ -19,11 +19,6 @@ def fake_fetch(url):
     if url not in PAGES:
         raise scraper.FetchError("nope")
     return url, (FX / PAGES[url]).read_text()
-
-def fake_search(q):
-    return ["https://www.amazon.com/dp/B09XS7JWHH", "https://www.rtings.com/headphones/reviews/sony/wh-1000xm5",
-            "https://blog.example.com/xm5-thoughts", "https://www.bestbuy.com/site/sony-xm5/6505727.p",
-            "https://electronics.sony.com/audio/headphones/wh1000xm5"]
 
 def test_price_parsing():
     assert scraper.parse_price("$1,299.99") == 1299.99
@@ -51,19 +46,6 @@ def test_parse_jsonld_and_meta():
     e = scraper.parse((FX / "target_eu.html").read_text(), "https://x.test/p")
     assert (e.name, e.price, e.currency, e.image) == ("Lego Set 10497", 1299.0, "EUR", "https://x.test/lego.jpg")
 
-def test_matcher_prefers_official_site_and_rejects_junk():
-    src = scraper.parse((FX / "amazon.html").read_text(), "https://www.amazon.com/dp/B09XS7JWHH")
-    alt = matcher.find_alternative(src, fetch=fake_fetch, search_fn=fake_search)
-    assert alt is not None
-    assert alt.store == "electronics.sony.com"  # verified by model number + brand, boosted as official
-    # Without the official site, Best Buy matches by UPC
-    alt2 = matcher.find_alternative(src, fetch=fake_fetch, search_fn=lambda q: fake_search(q)[:4])
-    assert alt2.store == "bestbuy.com" and alt2.price == 299.99
-
-def test_matcher_none_found():
-    src = scraper.parse((FX / "amazon.html").read_text(), "https://www.amazon.com/dp/B09XS7JWHH")
-    assert matcher.find_alternative(src, fetch=fake_fetch, search_fn=lambda q: fake_search(q)[:3]) is None
-
 def test_sale_detection_from_history():
     db.init()
     iid = db.insert_item({"source_url": "u", "track_url": "u", "price": 100.0})
@@ -74,63 +56,11 @@ def test_sale_detection_from_history():
     s = db.sale_info(db.get_item(iid))
     assert s["on_sale"] and s["was_price"] == 100 and s["percent_off"] == 20
 
-def test_api_end_to_end(monkeypatch):
-    from fastapi.testclient import TestClient
-    from app.main import app
-    monkeypatch.setattr(scraper, "fetch", fake_fetch)
-    monkeypatch.setattr(matcher, "search", lambda q: fake_search(q)[:4])
-    monkeypatch.setattr(service, "_save_image", lambda i, u: u)
-    with TestClient(app) as c:
-        assert c.post("/api/items", json={"url": "x"}).status_code == 401
-        assert c.post("/api/login", json={"password": "pw"}).status_code == 200
-        r = c.post("/api/items", json={"url": "https://www.amazon.com/Sony/dp/B09XS7JWHH/ref=x"})
-        it = r.json()
-        assert it["match_status"] == "matched" and it["store"] == "bestbuy.com"
-        assert it["on_sale"] and it["was_price"] == 399.99 and it["percent_off"] == 25
-        assert it["amazon_url"] == "https://www.amazon.com/dp/B09XS7JWHH"
-        # switch to Amazon link
-        it = c.patch(f"/api/items/{it['id']}", json={"use_amazon": True}).json()
-        assert it["store"] == "amazon.com" and it["price"] == 328.0
-        # unreachable link still gets added for manual editing
-        bad = c.post("/api/items", json={"url": "https://shop.example.com/thing"}).json()
-        assert bad["last_error"]
-        bad = c.patch(f"/api/items/{bad['id']}", json={"name": "Hand-made scarf", "price": 45}).json()
-        assert bad["name"] == "Hand-made scarf" and bad["price"] == 45
-        c.cookies.clear()
-        assert len(c.get("/api/items").json()) == 3   # guests can view
-        assert c.get("/").status_code == 200
-
-def test_guess_model_and_title_cleanup():
-    assert matcher.guess_model("Sony WH-1000XM5 Wireless Headphones, 30 Hour Battery, 256GB") == "WH-1000XM5"
-    assert matcher.guess_model("Cozy Blanket Queen Size") is None
-    t = matcher.title_from_search("B09XS7JWHH", results_fn=lambda q: [
-        ("https://www.reddit.com/r/x", "Reddit thread"),
-        ("https://www.amazon.com/Sony-WH-1000XM5/dp/B09XS7JWHH",
-         "Amazon.com: Sony WH-1000XM5 Wireless Industry Leading Noise Canceling Headphones : Electronics")])
-    assert t == "Sony WH-1000XM5 Wireless Industry Leading Noise Canceling Headphones"
-
 def test_blocked_detection():
     assert scraper._looks_blocked("https://www.amazon.com/dp/X", 200, "<form action='/errors/validateCaptcha'>")
     assert scraper._looks_blocked("https://www.amazon.com/dp/X", 503, "")
     assert not scraper._looks_blocked("https://www.amazon.com/dp/X", 200, "<span id='productTitle'>x</span> captcha")
     assert not scraper._looks_blocked("https://bestbuy.com/x", 200, "captcha")
-
-def test_amazon_blocked_falls_back_to_search(monkeypatch):
-    def fetch(url):
-        if scraper.is_amazon_url(url):
-            raise scraper.BlockedError("blocked", url)
-        return fake_fetch(url)
-    monkeypatch.setattr(scraper, "fetch", fetch)
-    monkeypatch.setattr(matcher, "search", lambda q: fake_search(q)[:4])
-    monkeypatch.setattr(matcher, "search_results", lambda q: [
-        ("https://www.amazon.com/dp/B09XS7JWHH", "Amazon.com: Sony WH-1000XM5 Wireless Noise Canceling Headphones : Electronics")])
-    monkeypatch.setattr(service, "_save_image", lambda i, u: u)
-    it = service.add_item("https://www.amazon.com/Sony/dp/B09XS7JWHH?ref=abc")
-    assert it["match_status"] == "matched" and it["store"] == "bestbuy.com" and it["price"] == 299.99
-    # No search hits at all -> placeholder item instead of a crash
-    monkeypatch.setattr(matcher, "search_results", lambda q: [])
-    it = service.add_item("https://www.amazon.com/dp/B000000000")
-    assert it["last_error"] and it["amazon_url"] == "https://www.amazon.com/dp/B000000000"
 
 def test_readonly_db_gives_readable_error(monkeypatch):
     from fastapi.testclient import TestClient
@@ -142,3 +72,118 @@ def test_readonly_db_gives_readable_error(monkeypatch):
         c.post("/api/login", json={"password": "pw"})
         r = c.post("/api/items", json={"url": "https://x.com"})
         assert r.status_code == 500 and "data folder" in r.json()["detail"]
+
+def test_target_embedded_and_api(monkeypatch):
+    html = (FX / "target.html").read_text()
+    url = "https://www.target.com/p/lego-orchid/-/A-83829876"
+    assert scraper.target_tcin(url) == "83829876"
+    # API unreachable -> embedded data fallback
+    monkeypatch.setattr(scraper, "_target_api", lambda p, h: None)
+    p = scraper.enrich(scraper.parse(html, url), html)
+    assert (p.price, p.list_price, p.gtin) == (39.99, 49.99, "673419355889")
+    assert p.name.startswith("LEGO Icons Orchid")
+
+def test_target_api_response(monkeypatch):
+    import curl_cffi.requests as creq
+    seen = {}
+    class R:
+        status_code = 200
+        def json(self):
+            return {"data": {"product": {"price": {"current_retail": 34.99, "reg_retail": 49.99},
+                    "item": {"product_description": {"title": "LEGO Icons Orchid &#38; Vase"}, "primary_barcode": "673419355889",
+                             "enrichment": {"images": {"primary_image_url": "https://target.scene7.com/orchid.jpg"}},
+                             "primary_brand": {"name": "LEGO"}}}}}
+    def get(url, params=None, **k):
+        seen.update(params); return R()
+    monkeypatch.setattr(creq, "get", get)
+    html = (FX / "target.html").read_text()
+    p = scraper.Product(url="https://www.target.com/p/x/-/A-83829876", store="target.com")
+    scraper._target_api(p, html)
+    assert seen["key"] == "0123456789abcdef0123456789abcdef01234567" and seen["tcin"] == "83829876"
+    assert (p.price, p.list_price, p.name, p.brand) == (34.99, 49.99, "LEGO Icons Orchid & Vase", "LEGO")
+
+def test_api_end_to_end(monkeypatch):
+    from fastapi.testclient import TestClient
+    from app.main import app
+    monkeypatch.setattr(scraper, "fetch", fake_fetch)
+    monkeypatch.setattr(service, "_save_image", lambda i, u: u)
+    with TestClient(app) as c:
+        assert c.post("/api/items", json={"url": "x"}).status_code == 401
+        assert c.post("/api/login", json={"password": "pw"}).status_code == 200
+        it = c.post("/api/items", json={"url": "https://www.amazon.com/Sony/dp/B09XS7JWHH/ref=x"}).json()
+        assert it["store"] == "amazon.com" and it["price"] == 328.0      # Amazon link is used as-is
+        assert it["on_sale"] and it["was_price"] == 399.99
+        bb = c.post("/api/items", json={"url": "https://www.bestbuy.com/site/sony-xm5/6505727.p"}).json()
+        assert bb["store"] == "bestbuy.com" and bb["percent_off"] == 25
+        bad = c.post("/api/items", json={"url": "https://shop.example.com/thing"}).json()
+        assert bad["last_error"]
+        bad = c.patch(f"/api/items/{bad['id']}", json={"name": "Hand-made scarf", "price": 45}).json()
+        assert bad["name"] == "Hand-made scarf" and bad["price"] == 45
+        assert c.post(f"/api/items/{it['id']}/rematch").status_code in (404, 405)
+        c.cookies.clear()
+        assert len(c.get("/api/items").json()) >= 3   # guests can view
+        assert c.get("/").status_code == 200
+
+def test_amazon_blocked_adds_placeholder(monkeypatch):
+    def fetch(url):
+        raise scraper.BlockedError("Amazon showed a bot check (captcha).", url)
+    monkeypatch.setattr(scraper, "fetch", fetch)
+    it = service.add_item("https://www.amazon.com/Sony/dp/B09XS7JWHH?ref=abc")
+    assert it["track_url"] == "https://www.amazon.com/dp/B09XS7JWHH" and "bot check" in it["last_error"]
+
+def test_multi_version_page(monkeypatch):
+    monkeypatch.setattr(scraper, "_shopify", lambda p: None)  # use the JSON-LD path
+    html = (FX / "band_store.html").read_text()
+    base = "https://shop.lanterns.test/products/midnight-garden"
+    lp = scraper.enrich(scraper.parse(html, base + "?variant=222"), html)
+    cd = scraper.enrich(scraper.parse(html, base + "?variant=111"), html)
+    assert (lp.price, scraper.display_name(lp), lp.variant_key) == (28.0, "Midnight Garden – Vinyl LP", "LAN-LP")
+    assert (cd.price, scraper.display_name(cd), cd.variant_key) == (12.0, "Midnight Garden – CD", "LAN-CD")
+    plain = scraper.parse(html, base)
+    assert plain.price == 12.0 and len(plain.variants) == 2
+    assert scraper.select_variant(plain, "LAN-LP") and plain.price == 28.0 and plain.url.endswith("variant=222")
+    assert not scraper.select_variant(plain, "nope")
+
+SHOPIFY = {"title": "Screwdriver", "vendor": "LTT", "featured_image": "//cdn.shopify.com/a.jpg", "variants": [
+    {"id": 111, "public_title": "Black", "price": 6999, "compare_at_price": None, "available": False, "barcode": "111111111111"},
+    {"id": 222, "public_title": "Orange", "price": 5999, "compare_at_price": 6999, "available": True, "barcode": "222222222222",
+     "featured_image": {"src": "//cdn.shopify.com/orange.jpg"}}]}
+
+def test_shopify_version_picker_end_to_end(monkeypatch):
+    import curl_cffi.requests as creq
+    from fastapi.testclient import TestClient
+    from app.main import app
+    class R:
+        status_code = 200
+        def json(self): return SHOPIFY
+    monkeypatch.setattr(creq, "get", lambda url, **k: R())
+    monkeypatch.setattr(scraper, "fetch", lambda url: (url, '<html><script src="https://cdn.shopify.com/x.js"></script><title>Screwdriver</title></html>'))
+    monkeypatch.setattr(service, "_save_image", lambda i, u: u)
+    base = "https://www.lttstore.com/products/screwdriver"
+    with TestClient(app) as c:
+        c.post("/api/login", json={"password": "pw"})
+        # link without a version: first in-stock version, and the choice is remembered
+        a = c.post("/api/items", json={"url": base}).json()
+        assert (a["name"], a["price"], a["variant_key"]) == ("Screwdriver – Orange", 59.99, "222")
+        assert a["on_sale"] and [v["title"] for v in a["variants"]] == ["Black", "Orange"]
+        # link with a version
+        b = c.post("/api/items", json={"url": base + "?variant=111"}).json()
+        assert (b["name"], b["price"], b["in_stock"]) == ("Screwdriver – Black", 69.99, 0)
+        # pick another version in the edit screen
+        a2 = c.patch(f"/api/items/{a['id']}", json={"variant_key": "111"}).json()
+        assert (a2["name"], a2["price"], a2["variant_key"]) == ("Screwdriver – Black", 69.99, "111")
+        assert a2["track_url"].endswith("?variant=111") and not a2["on_sale"]
+        # a later price check keeps the picked version even though Orange is the in-stock default
+        a3 = c.post(f"/api/items/{a['id']}/refresh").json()
+        assert (a3["price"], a3["variant_key"]) == (69.99, "111")
+
+def test_old_database_is_upgraded(tmp_path, monkeypatch):
+    import sqlite3
+    path = tmp_path / "giftlist.db"
+    c = sqlite3.connect(path)
+    c.execute("CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, source_url TEXT NOT NULL, track_url TEXT NOT NULL, name TEXT, price REAL, purchased INTEGER DEFAULT 0, sort_order INTEGER DEFAULT 0, priority INTEGER DEFAULT 0, created_at TEXT)")
+    c.execute("INSERT INTO items (source_url, track_url, name) VALUES ('u','u','Old item')"); c.commit(); c.close()
+    monkeypatch.setattr(db, "DB_PATH", str(path))
+    db.init()
+    it = db.all_items()[0]
+    assert it["name"] == "Old item" and "variant_key" in it and "variants" in it

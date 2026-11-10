@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import hmac
 import logging
 import os
@@ -21,6 +22,7 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 SECRET = (os.environ.get("SECRET_KEY") or ADMIN_PASSWORD or "giftlist").encode()
 REFRESH_HOURS = float(os.environ.get("REFRESH_HOURS", "12"))
 LIST_TITLE = os.environ.get("LIST_TITLE", "My Wishlist")
+THEME = os.environ.get("THEME", "auto").lower()  # auto / christmas / birthday / default
 HERE = os.path.dirname(__file__)
 
 scheduler = BackgroundScheduler()
@@ -89,7 +91,7 @@ def logout(response: Response):
 
 @app.get("/api/me")
 def me(request: Request):
-    return {"admin": is_admin(request), "auth_enabled": bool(ADMIN_PASSWORD), "title": LIST_TITLE,
+    return {"admin": is_admin(request), "auth_enabled": bool(ADMIN_PASSWORD), "title": LIST_TITLE, "theme": THEME,
             "refresh_hours": REFRESH_HOURS}
 
 
@@ -97,6 +99,10 @@ def me(request: Request):
 
 def _present(item: dict) -> dict:
     hist = db.history(item["id"], 60)
+    try:
+        item = {**item, "variants": json.loads(item.get("variants") or "[]")}
+    except ValueError:
+        item = {**item, "variants": []}
     return {**item, **db.sale_info(item, hist),
             "history": [{"p": h["price"], "t": h["checked_at"]} for h in hist[-30:]]}
 
@@ -109,14 +115,13 @@ def list_items():
 class NewItem(BaseModel):
     url: str
     notes: str = ""
-    find_other_store: bool = True
 
 
 @app.post("/api/items", dependencies=[Depends(require_admin)])
 def add_item(body: NewItem):
     if not body.url.strip():
         raise HTTPException(400, "Paste a product link")
-    return _present(service.add_item(body.url, body.notes, body.find_other_store))
+    return _present(service.add_item(body.url, body.notes))
 
 
 class ItemPatch(BaseModel):
@@ -128,6 +133,7 @@ class ItemPatch(BaseModel):
     priority: int | None = None
     purchased: bool | None = None
     use_amazon: bool | None = None
+    variant_key: str | None = None
 
 
 @app.patch("/api/items/{item_id}", dependencies=[Depends(require_admin)])
@@ -157,22 +163,16 @@ def edit_item(item_id: int, body: ItemPatch):
     elif body.track_url and body.track_url.strip() != item["track_url"]:
         new_url = body.track_url.strip()
     if new_url:
-        db.update_item(item_id, {"track_url": new_url, "match_status": "manual"})
+        db.update_item(item_id, {"track_url": new_url, "variant_key": None, "variants": None})
         service.refresh_item(item_id)
+    elif body.variant_key and body.variant_key != item.get("variant_key"):
+        service.set_variant(item_id, body.variant_key)
     return _present(db.get_item(item_id))
 
 
 @app.post("/api/items/{item_id}/refresh", dependencies=[Depends(require_admin)])
 def refresh(item_id: int):
     item = service.refresh_item(item_id)
-    if not item:
-        raise HTTPException(404)
-    return _present(item)
-
-
-@app.post("/api/items/{item_id}/rematch", dependencies=[Depends(require_admin)])
-def rematch(item_id: int):
-    item = service.rematch(item_id)
     if not item:
         raise HTTPException(404)
     return _present(item)
