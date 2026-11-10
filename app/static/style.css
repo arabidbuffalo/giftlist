@@ -120,3 +120,34 @@ header::after { content: ""; position: absolute; left: 0; right: 0; bottom: -5px
   [data-theme="christmas"] .snow i { color: #dfeaf3; opacity: .55; }
   [data-theme="birthday"] { --bg: #17131d; --card: #211b2a; --line: #372d45; --accent: #a987ff; --accent-ink: #150f22; }
 }
+
+/* ---- Compact layout on phones: always two columns, smaller cards and header ---- */
+@media (max-width: 699px) {
+  header { padding: 8px 10px 8px; padding-top: max(8px, env(safe-area-inset-top)); }
+  h1 { font-size: 1.1rem; }
+  .bar-actions button { padding: 5px 9px; font-size: .8rem; }
+  #addForm { margin-top: 6px; gap: 6px; }
+  #addForm input, #addForm button { padding: 7px 10px; font-size: .9rem; }
+  .filters { margin-top: 6px; gap: 6px; font-size: .8rem; }
+  .filters select { padding: 4px 6px; font-size: .8rem; }
+  .chip { padding: 3px 9px; }
+  main { padding: 12px 10px 50px; }
+  .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .card { border-radius: 11px; }
+  .card .img { aspect-ratio: 4 / 3; }
+  .card .img img { padding: 6px; }
+  .card .img .noimg { font-size: 2.2rem; }
+  .body { padding: 7px 9px 9px; gap: 3px; }
+  .name { font-size: .82rem; line-height: 1.25; -webkit-line-clamp: 2; }
+  .price-row { gap: 5px; }
+  .price { font-size: 1rem; }
+  .was { font-size: .78rem; }
+  .save { font-size: .68rem; padding: 1px 5px; }
+  .meta, .notes, .warn, .oos { font-size: .72rem; }
+  .warn { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .ribbon { top: 6px; left: 6px; font-size: .68rem; padding: 3px 7px; }
+  .edit { top: 5px; right: 5px; padding: 2px 7px; font-size: .75rem; }
+  .card .img .star { bottom: 5px; left: 5px; font-size: .68rem; padding: 1px 6px; }
+  .spark { width: 44px; height: 14px; }
+}
+@media (max-width: 699px) and (min-width: 520px) { .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
