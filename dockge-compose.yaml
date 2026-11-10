@@ -1,0 +1,19 @@
+# Paste into Dockge as a new stack. Replace YOUR-GITHUB-USERNAME, POOL and the password.
+services:
+  giftlist:
+    image: ghcr.io/YOUR-GITHUB-USERNAME/giftlist:latest
+    container_name: giftlist
+    restart: unless-stopped
+    user: "568:568"             # TrueNAS "apps" user; the data folder must be owned by it
+    ports:
+      - "8080:8080"
+    volumes:
+      - /mnt/POOL/apps/giftlist/data:/data
+    environment:
+      LIST_TITLE: "My Wishlist"
+      ADMIN_PASSWORD: "change-me"
+      REFRESH_HOURS: "12"
+      SALE_DROP_PERCENT: "5"
+      MATCH_AMAZON: "true"
+      TZ: "America/Chicago"
+      # SEARXNG_URL: "http://searxng:8080"

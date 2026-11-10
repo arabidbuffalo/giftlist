@@ -1,0 +1,20 @@
+# Paste this into TrueNAS: Apps > Discover Apps > ⋮ > Install via YAML
+# Change POOL to your pool name and set a password first.
+services:
+  giftlist:
+    image: giftlist:local
+    pull_policy: never          # image is built locally, not downloaded
+    container_name: giftlist
+    restart: unless-stopped
+    user: "568:568"             # TrueNAS "apps" user
+    ports:
+      - "8080:8080"
+    volumes:
+      - /mnt/POOL/apps/giftlist/data:/data
+    environment:
+      LIST_TITLE: "My Wishlist"
+      ADMIN_PASSWORD: "change-me"
+      REFRESH_HOURS: "12"
+      SALE_DROP_PERCENT: "5"
+      MATCH_AMAZON: "true"
+      TZ: "America/Chicago"

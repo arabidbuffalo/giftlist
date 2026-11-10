@@ -1,0 +1,26 @@
+services:
+  giftlist:
+    build: .
+    container_name: giftlist
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+    environment:
+      LIST_TITLE: "My Wishlist"
+      ADMIN_PASSWORD: "change-me"      # people without it can view but not edit
+      REFRESH_HOURS: "12"              # how often prices are re-checked
+      SALE_DROP_PERCENT: "5"           # % below usual price that counts as a sale
+      MATCH_AMAZON: "true"             # look for Amazon items on other stores
+      TZ: "America/Chicago"
+      # SEARXNG_URL: "http://searxng:8080"   # optional, see README
+
+  # Optional: your own search engine, makes the Amazon matching much more reliable.
+  # Uncomment, then set SEARXNG_URL above. Enable JSON output in ./searxng/settings.yml
+  # (search: formats: [html, json]).
+  # searxng:
+  #   image: searxng/searxng:latest
+  #   restart: unless-stopped
+  #   volumes:
+  #     - ./searxng:/etc/searxng
