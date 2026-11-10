@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Wishlist</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎁</text></svg>">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <div class="bar">
+    <h1 id="title">Wishlist</h1>
+    <div class="bar-actions">
+      <button id="refreshAll" class="ghost admin-only" title="Check all prices now">↻ Prices</button>
+      <button id="loginBtn" class="ghost">Sign in</button>
+    </div>
+  </div>
+  <form id="addForm" class="admin-only">
+    <input id="addUrl" type="url" inputmode="url" placeholder="Paste a product link…" required autocomplete="off">
+    <button type="submit" id="addBtn">Add</button>
+  </form>
+  <p id="addStatus" class="status" hidden></p>
+  <div class="filters">
+    <label class="chip"><input type="checkbox" id="saleOnly"> On sale</label>
+    <select id="sort" aria-label="Sort">
+      <option value="default">Sort: My order</option>
+      <option value="price-asc">Price: low → high</option>
+      <option value="price-desc">Price: high → low</option>
+      <option value="discount">Biggest discount</option>
+      <option value="new">Newest</option>
+    </select>
+    <span id="count" class="muted"></span>
+  </div>
+</header>
+
+<main>
+  <section id="grid" class="grid"></section>
+  <p id="empty" class="empty" hidden>Nothing here yet. Paste a product link above to add your first gift idea.</p>
+  <details id="purchasedWrap" hidden>
+    <summary>Purchased <span id="purchasedCount"></span></summary>
+    <section id="purchasedGrid" class="grid"></section>
+  </details>
+</main>
+
+<dialog id="editDlg">
+  <form method="dialog" id="editForm">
+    <h2>Edit item</h2>
+    <label>Name <input name="name"></label>
+    <div class="row">
+      <label>Price <input name="price" type="number" step="0.01" min="0" inputmode="decimal"></label>
+      <label>Priority
+        <select name="priority">
+          <option value="0">Normal</option><option value="1">Really want</option><option value="2">Top pick ★</option>
+        </select>
+      </label>
+    </div>
+    <label>Notes (size, color…) <textarea name="notes" rows="2"></textarea></label>
+    <label>Tracked link <input name="track_url" type="url"></label>
+    <label>Image URL <input name="image"></label>
+    <p class="muted small" id="editMeta"></p>
+    <div class="dlg-actions wrap">
+      <button type="button" data-act="refresh" class="ghost">↻ Check price</button>
+      <button type="button" data-act="rematch" class="ghost amz-only">Find on another store</button>
+      <button type="button" data-act="use_amazon" class="ghost amz-only">Use Amazon link</button>
+      <button type="button" data-act="purchased" class="ghost">Mark purchased</button>
+      <button type="button" data-act="delete" class="ghost danger">Delete</button>
+    </div>
+    <div class="dlg-actions">
+      <button value="cancel" class="ghost">Cancel</button>
+      <button value="save" id="saveBtn">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="loginDlg">
+  <form method="dialog" id="loginForm">
+    <h2>Sign in to edit</h2>
+    <input name="password" type="password" placeholder="Password" autocomplete="current-password">
+    <p class="status error" id="loginErr" hidden></p>
+    <div class="dlg-actions">
+      <button value="cancel" class="ghost">Cancel</button>
+      <button value="ok">Sign in</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
