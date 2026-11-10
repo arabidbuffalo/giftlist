@@ -99,3 +99,46 @@ def test_api_end_to_end(monkeypatch):
         c.cookies.clear()
         assert len(c.get("/api/items").json()) == 3   # guests can view
         assert c.get("/").status_code == 200
+
+def test_guess_model_and_title_cleanup():
+    assert matcher.guess_model("Sony WH-1000XM5 Wireless Headphones, 30 Hour Battery, 256GB") == "WH-1000XM5"
+    assert matcher.guess_model("Cozy Blanket Queen Size") is None
+    t = matcher.title_from_search("B09XS7JWHH", results_fn=lambda q: [
+        ("https://www.reddit.com/r/x", "Reddit thread"),
+        ("https://www.amazon.com/Sony-WH-1000XM5/dp/B09XS7JWHH",
+         "Amazon.com: Sony WH-1000XM5 Wireless Industry Leading Noise Canceling Headphones : Electronics")])
+    assert t == "Sony WH-1000XM5 Wireless Industry Leading Noise Canceling Headphones"
+
+def test_blocked_detection():
+    assert scraper._looks_blocked("https://www.amazon.com/dp/X", 200, "<form action='/errors/validateCaptcha'>")
+    assert scraper._looks_blocked("https://www.amazon.com/dp/X", 503, "")
+    assert not scraper._looks_blocked("https://www.amazon.com/dp/X", 200, "<span id='productTitle'>x</span> captcha")
+    assert not scraper._looks_blocked("https://bestbuy.com/x", 200, "captcha")
+
+def test_amazon_blocked_falls_back_to_search(monkeypatch):
+    def fetch(url):
+        if scraper.is_amazon_url(url):
+            raise scraper.BlockedError("blocked", url)
+        return fake_fetch(url)
+    monkeypatch.setattr(scraper, "fetch", fetch)
+    monkeypatch.setattr(matcher, "search", lambda q: fake_search(q)[:4])
+    monkeypatch.setattr(matcher, "search_results", lambda q: [
+        ("https://www.amazon.com/dp/B09XS7JWHH", "Amazon.com: Sony WH-1000XM5 Wireless Noise Canceling Headphones : Electronics")])
+    monkeypatch.setattr(service, "_save_image", lambda i, u: u)
+    it = service.add_item("https://www.amazon.com/Sony/dp/B09XS7JWHH?ref=abc")
+    assert it["match_status"] == "matched" and it["store"] == "bestbuy.com" and it["price"] == 299.99
+    # No search hits at all -> placeholder item instead of a crash
+    monkeypatch.setattr(matcher, "search_results", lambda q: [])
+    it = service.add_item("https://www.amazon.com/dp/B000000000")
+    assert it["last_error"] and it["amazon_url"] == "https://www.amazon.com/dp/B000000000"
+
+def test_readonly_db_gives_readable_error(monkeypatch):
+    from fastapi.testclient import TestClient
+    from app.main import app
+    import sqlite3
+    def boom(*a, **k): raise sqlite3.OperationalError("attempt to write a readonly database")
+    monkeypatch.setattr(service, "add_item", boom)
+    with TestClient(app, raise_server_exceptions=False) as c:
+        c.post("/api/login", json={"password": "pw"})
+        r = c.post("/api/items", json={"url": "https://x.com"})
+        assert r.status_code == 500 and "data folder" in r.json()["detail"]

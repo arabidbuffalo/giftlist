@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -41,6 +41,15 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Gift List", lifespan=lifespan)
+
+
+@app.exception_handler(Exception)
+async def unexpected_error(request: Request, exc: Exception):
+    log.exception("unhandled error on %s", request.url.path)
+    msg = str(exc)
+    if "readonly database" in msg or isinstance(exc, PermissionError):
+        msg = "The app can't write to its data folder. Check that the folder's owner matches the user: line in your compose file."
+    return JSONResponse({"detail": f"Something went wrong: {msg}"}, status_code=500)
 
 
 # ---------------------------------------------------------------- auth
@@ -189,7 +198,12 @@ def health():
 
 # ---------------------------------------------------------------- static
 
-os.makedirs(os.path.join(db.DATA_DIR, "images"), exist_ok=True)
+try:
+    os.makedirs(os.path.join(db.DATA_DIR, "images"), exist_ok=True)
+except PermissionError:
+    raise SystemExit(
+        f"\n*** Can't write to {db.DATA_DIR}. The app runs as user {os.getuid()}:{os.getgid()}; "
+        f"make the data folder on the host owned by that user (chown -R {os.getuid()}:{os.getgid()} <folder>). ***\n")
 app.mount("/images", StaticFiles(directory=os.path.join(db.DATA_DIR, "images")), name="images")
 app.mount("/static", StaticFiles(directory=os.path.join(HERE, "static")), name="static")
 

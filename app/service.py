@@ -7,7 +7,7 @@ import random
 import time
 
 from . import db, matcher, scraper
-from .scraper import FetchError, Product
+from .scraper import BlockedError, FetchError, Product
 
 log = logging.getLogger(__name__)
 
@@ -58,6 +58,19 @@ def add_item(url: str, notes: str = "", try_match: bool = True) -> dict:
         url = "https://" + url
     try:
         src = scraper.scrape(url)
+    except BlockedError as e:
+        # Amazon refused us. Find the product name through search and look for it elsewhere.
+        amz = scraper.clean_amazon_url(e.final_url or url)
+        found = _amazon_fallback(amz, url, notes, try_match)
+        if found:
+            return found
+        item_id = db.insert_item({
+            "source_url": url, "track_url": amz, "store": scraper.store_name(amz),
+            "name": "Amazon item (couldn't read the page)", "notes": notes,
+            "last_error": "Amazon blocked the request. Edit the name and price, or tap Check price later.",
+            "amazon_url": amz, "match_status": "not_found", "last_checked": db.now(),
+        })
+        return db.get_item(item_id)
     except FetchError as e:
         item_id = db.insert_item({
             "source_url": url, "track_url": url, "store": scraper.store_name(url),
@@ -89,6 +102,33 @@ def add_item(url: str, notes: str = "", try_match: bool = True) -> dict:
         "match_status": status,
         "last_checked": db.now(),
         "last_error": None if chosen.price else "Couldn't find a price on the page — you can enter it by hand.",
+    })
+    item_id = db.insert_item(fields)
+    if chosen.price:
+        db.add_price(item_id, chosen.price, chosen.list_price)
+    img = _save_image(item_id, fields["image"])
+    if img != fields["image"]:
+        db.update_item(item_id, {"image": img})
+    return db.get_item(item_id)
+
+
+def _amazon_fallback(amz_url: str, source_url: str, notes: str, try_match: bool) -> dict | None:
+    asin = scraper.amazon_asin(amz_url)
+    title = matcher.title_from_search(asin) if asin else None
+    if not title:
+        return None
+    src = matcher.product_from_title(amz_url, title)
+    alt = matcher.find_alternative(src) if (MATCH_ENABLED and try_match) else None
+    chosen = alt or src
+    fields = _fields_from(chosen)
+    fields.update({
+        "source_url": source_url, "amazon_url": amz_url,
+        "name": chosen.name or title, "image": chosen.image,
+        "brand": (alt and alt.brand) or src.brand, "gtin": alt.gtin if alt else None,
+        "mpn": (alt and alt.mpn) or src.mpn, "notes": notes,
+        "match_status": "matched" if alt else "not_found", "last_checked": db.now(),
+        "last_error": None if chosen.price else
+            "Amazon blocked the price check and no other store was found. Enter the price by hand or try Check price later.",
     })
     item_id = db.insert_item(fields)
     if chosen.price:

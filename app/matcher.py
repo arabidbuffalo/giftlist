@@ -59,15 +59,15 @@ def _allowed(url: str) -> bool:
 
 # ---------------------------------------------------------------- search backends
 
-def _search_searxng(q: str) -> list[str]:
+def _search_searxng(q: str) -> list[tuple[str, str]]:
     from curl_cffi import requests as creq
 
     r = creq.get(f"{SEARXNG_URL}/search", params={"q": q, "format": "json", "language": "en-US"}, timeout=20)
     r.raise_for_status()
-    return [x["url"] for x in r.json().get("results", []) if x.get("url")]
+    return [(x["url"], x.get("title", "")) for x in r.json().get("results", []) if x.get("url")]
 
 
-def _search_ddg(q: str) -> list[str]:
+def _search_ddg(q: str) -> list[tuple[str, str]]:
     from curl_cffi import requests as creq
 
     r = creq.post("https://html.duckduckgo.com/html/", data={"q": q, "kl": "us-en"}, impersonate="chrome", timeout=20)
@@ -81,16 +81,57 @@ def _search_ddg(q: str) -> list[str]:
         if href.startswith("//"):
             href = "https:" + href
         if href:
-            out.append(href)
+            out.append((href, a.get_text(" ", strip=True)))
     return out
 
 
-def search(q: str) -> list[str]:
+def search_results(q: str) -> list[tuple[str, str]]:
     try:
         return _search_searxng(q) if SEARXNG_URL else _search_ddg(q)
     except Exception as e:
         log.warning("search failed for %r: %s", q, e)
         return []
+
+
+def search(q: str) -> list[str]:
+    return [u for u, _ in search_results(q)]
+
+
+def title_from_search(asin: str, results_fn=None) -> str | None:
+    """When Amazon blocks us, find the product's name from search results for its ASIN."""
+    results_fn = results_fn or search_results
+    for url, title in results_fn(asin):
+        if not title:
+            continue
+        if scraper.is_amazon_url(url) and asin in url:
+            t = re.sub(r"^Amazon\.[a-z.]+\s*:\s*", "", title, flags=re.I)
+            t = re.split(r"\s*:\s*Amazon\.|\s*[|]\s*Amazon|\s*-\s*Amazon\.", t, flags=re.I)[0]
+            t = re.sub(r"\s*:\s*[A-Z][\w &,'-]{0,40}$", "", t)  # trailing " : Electronics"
+            if len(t) > 8:
+                return t.strip()
+    return None
+
+
+def guess_model(name: str) -> str | None:
+    """Pull a model-number-looking token (letters + digits, e.g. WH-1000XM5) out of a product name."""
+    best = None
+    for tok in re.findall(r"\b[A-Za-z0-9][A-Za-z0-9\-/.]{3,}[A-Za-z0-9]\b", name or ""):
+        core = re.sub(r"[^A-Za-z0-9]", "", tok)
+        if len(core) < 4 or not re.search(r"\d", core) or not re.search(r"[A-Za-z]", core):
+            continue
+        if re.fullmatch(r"\d+(gb|tb|mb|mah|w|v|hz|mm|cm|in|ft|oz|lb|lbs|ml|qt|pack|pcs|pc|k|p)", core, re.I):
+            continue  # sizes/units, not models
+        if best is None or len(core) > len(re.sub(r"[^A-Za-z0-9]", "", best)):
+            best = tok
+    return best
+
+
+def product_from_title(amazon_url: str, title: str) -> Product:
+    p = Product(url=amazon_url, store=store_name(amazon_url), name=title)
+    words = title.split()
+    p.brand = words[0].strip(",") if words else None
+    p.mpn = guess_model(title)
+    return p
 
 
 # ---------------------------------------------------------------- verification

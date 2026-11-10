@@ -120,25 +120,76 @@ def _text(el) -> str:
 
 # ---------------------------------------------------------------- fetching
 
+class BlockedError(FetchError):
+    """The site answered with a bot check instead of the page."""
+
+    def __init__(self, msg: str, final_url: str = ""):
+        super().__init__(msg)
+        self.final_url = final_url
+
+
+# Different browser fingerprints; Amazon often lets one through when another gets a captcha.
+FINGERPRINTS = ["chrome", "safari", "chrome_android", "safari_ios", "edge"]
+
+
+def _looks_blocked(final: str, status: int, text: str) -> bool:
+    if not is_amazon_url(final):
+        return False
+    head = text[:30000].lower()
+    if "productTitle" in text:
+        return False
+    return status == 503 or "captcha" in head or "/errors/validatecaptcha" in head or "robot check" in head
+
+
+def _get(session, url: str):
+    r = session.get(url, headers=HEADERS, timeout=TIMEOUT, allow_redirects=True)
+    return r.status_code, r.text, str(r.url)
+
+
 def fetch(url: str) -> tuple[str, str]:
     """Return (final_url, html). Uses browser TLS impersonation to get past basic bot checks."""
-    try:
-        from curl_cffi import requests as creq
+    import random
+    import time
 
-        r = creq.get(url, impersonate="chrome", headers=HEADERS, timeout=TIMEOUT, allow_redirects=True)
-        status, text, final = r.status_code, r.text, str(r.url)
-    except ImportError:  # pragma: no cover
-        import httpx
+    from curl_cffi import requests as creq
 
-        r = httpx.get(url, headers={**HEADERS, "User-Agent": "Mozilla/5.0"}, timeout=TIMEOUT, follow_redirects=True)
-        status, text, final = r.status_code, r.text, str(r.url)
-    except Exception as e:
-        raise FetchError(f"Could not reach {store_name(url)}: {e}") from e
+    tries = FINGERPRINTS if is_amazon_url(url) else FINGERPRINTS[:1]
+    status, text, final = 0, "", url
+    last_err = None
+    for fp in tries:
+        try:
+            with creq.Session(impersonate=fp) as s:
+                if is_amazon_url(url):
+                    s.cookies.set("i18n-prefs", "USD", domain=".amazon.com")
+                    s.cookies.set("lc-main", "en_US", domain=".amazon.com")
+                status, text, final = _get(s, url)
+                if _looks_blocked(final, status, text):
+                    # Visiting the home page first gives the session normal cookies; then retry.
+                    p = urlparse(final if is_amazon_url(final) else url)
+                    _get(s, f"{p.scheme}://{p.netloc}/")
+                    time.sleep(random.uniform(1.0, 2.5))
+                    status, text, final = _get(s, url)
+        except Exception as e:  # bad fingerprint name, network error, etc.
+            last_err = e
+            log.info("fetch %s with %s failed: %s", url, fp, e)
+            continue
+        if not _looks_blocked(final, status, text):
+            break
+        log.info("Amazon blocked fingerprint %s", fp)
+        time.sleep(random.uniform(0.5, 1.5))
+    else:
+        if status == 0 and last_err:
+            raise FetchError(f"Could not reach {store_name(url)}: {last_err}")
+        if _looks_blocked(final, status, text):
+            raise BlockedError("Amazon showed a bot check (captcha).", final)
     if status >= 400:
         raise FetchError(f"{store_name(url)} returned HTTP {status}")
-    if is_amazon_url(final) and ("captcha" in text.lower()[:20000] and "productTitle" not in text):
-        raise FetchError("Amazon showed a bot check (captcha). Try again later.")
     return final, text
+
+
+def amazon_asin(url: str) -> str | None:
+    m = re.search(r"/(?:dp|gp/product|gp/aw/d|product)/([A-Z0-9]{10})", url)
+    return m.group(1) if m else None
 
 
 # ---------------------------------------------------------------- parsing
