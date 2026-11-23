@@ -42,9 +42,13 @@ function card(it) {
     ? ` · <a href="${esc(it.amazon_url)}" target="_blank" rel="noopener">Amazon</a>` : "";
   const stale = it.last_error ? `<div class="warn">⚠ ${esc(it.last_error)}</div>` : "";
   const oos = it.in_stock === 0 ? `<div class="oos">Out of stock</div>` : "";
-  const star = it.priority >= 2 ? `<span class="star">★ Top pick</span>` : it.priority == 1 ? `<span class="star">♥</span>` : "";
+  const pr = PRIORITY[it.priority || 0];
+  const star = pr.label ? `<span class="star prio-${it.priority}">${pr.icon} ${pr.label}</span>` : "";
+  const prioBtn = state.admin && !it.purchased
+    ? `<button class="ghost prio-btn prio-${it.priority || 0}" data-prio="${it.id}" title="Priority: ${pr.label || "Normal"} (tap to change)"
+         aria-label="Change priority, now ${pr.label || "Normal"}">${pr.icon || "☆"}</button>` : "";
   return `
-  <article class="card ${sale ? "on-sale" : ""} ${state.admin ? "has-edit" : ""}" data-id="${it.id}">
+  <article class="card ${sale ? "on-sale" : ""} ${state.admin ? "has-edit" : ""} ${it.priority ? `prio-card-${it.priority}` : ""}" data-id="${it.id}">
     <a class="img" href="${esc(it.track_url)}" target="_blank" rel="noopener">${img}${star}</a>
     ${sale ? `<span class="ribbon">SALE${it.percent_off ? ` −${it.percent_off}%` : ""}</span>` : ""}
     <div class="body">
@@ -61,15 +65,23 @@ function card(it) {
         ${sparkline(it.history)}
       </div>
     </div>
-    ${state.admin ? `<button class="ghost edit" data-edit="${it.id}" aria-label="Edit" title="Edit">✎</button>` : ""}
+    ${state.admin ? `<div class="card-tools">${prioBtn}<button class="ghost edit" data-edit="${it.id}" aria-label="Edit" title="Edit">✎</button></div>` : ""}
   </article>`;
 }
+
+const PRIORITY = [
+  { icon: "", label: "" },
+  { icon: "♥", label: "Really want" },
+  { icon: "★", label: "Top pick" },
+];
+const byPriority = (a, b) => (b.priority || 0) - (a.priority || 0) || b.id - a.id;
 
 function render() {
   const saleOnly = $("#saleOnly").checked, sort = $("#sort").value;
   let active = state.items.filter(i => !i.purchased && (!saleOnly || i.on_sale));
   const bought = state.items.filter(i => i.purchased);
   const by = {
+    "priority": byPriority,
     "price-asc": (a, b) => (a.price ?? 1e9) - (b.price ?? 1e9),
     "price-desc": (a, b) => (b.price ?? -1) - (a.price ?? -1),
     "discount": (a, b) => (b.percent_off || 0) - (a.percent_off || 0),
@@ -126,6 +138,17 @@ $("#addForm").addEventListener("submit", async e => {
 
 // ---- edit dialog
 const dlg = $("#editDlg"), form = $("#editForm");
+// one-tap priority on the card: Normal → Really want → Top pick → Normal
+document.addEventListener("click", async e => {
+  const btn = e.target.closest?.("[data-prio]");
+  if (!btn) return;
+  const it = state.items.find(x => x.id == btn.dataset.prio);
+  const next = ((it.priority || 0) + 1) % PRIORITY.length;
+  it.priority = next; render();                     // show it right away
+  try { upsert(await api(`/api/items/${it.id}`, { method: "PATCH", body: { priority: next } })); }
+  catch (err) { alert(err.message); load(); }
+});
+
 document.addEventListener("click", e => {
   const id = e.target.dataset?.edit;
   if (!id) return;

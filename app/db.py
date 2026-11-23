@@ -102,7 +102,7 @@ def get_item(item_id: int) -> dict | None:
 
 def all_items() -> list[dict]:
     with _lock, conn() as c:
-        rows = c.execute("SELECT * FROM items ORDER BY purchased, sort_order, priority DESC, id DESC").fetchall()
+        rows = c.execute("SELECT * FROM items ORDER BY purchased, priority DESC, id DESC").fetchall()
     return [dict(r) for r in rows]
 
 
